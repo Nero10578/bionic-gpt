@@ -1,0 +1,19 @@
+name: Integration Testing
+
+on:
+  workflow_dispatch: # Triggers the workflow manually
+
+jobs:
+
+  integration-tests:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Start Docker Compose
+        run: |
+          ./bionic.sh --testing
+          kubectl get pods -n bionic-gpt

@@ -1,0 +1,163 @@
+name: CI
+
+on:
+  push:
+    branches: 
+      - main
+    paths-ignore:
+      - 'docker-compose/*'
+      - 'website/**'
+      - 'infra-as-code/**'
+      - '*.md'
+      - 'Pulumi.yaml'
+      - 'bionic.sh'
+      - '.github/workflows/integration-testing.yml'
+      - '.github/workflows/embeddings-docker.yml'
+      - 'crates/k8s-operator/config/*'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'docker-compose/*'
+      - 'website/**'
+      - 'infra-as-code/**'
+      - '*.md'
+      - 'Pulumi.yaml'
+      - 'bionic.sh'
+      - '.github/workflows/integration-testing.yml'
+      - '.github/workflows/embeddings-docker.yml'
+      - 'crates/k8s-operator/config/*'
+
+jobs:
+
+  security_audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    needs: security_audit
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE_COLOR: 1
+    steps:
+    - uses: actions/checkout@v4
+    - name: Put back the git branch into git (Earthly uses it for tagging)
+      run: |
+        branch=""
+        if [ -n "$GITHUB_HEAD_REF" ]; then
+          branch="$GITHUB_HEAD_REF"
+        else
+          branch="${GITHUB_REF##*/}"
+        fi
+        git checkout -b "$branch" || true
+
+    - name: Download latest earthly
+      run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'"
+
+    - name: Earthly version
+      run: earthly --version 
+         
+    - name: Log in to the Github Container registry
+      uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Run build
+      if: github.ref != 'refs/heads/main'
+      run: earthly --allow-privileged --output --ci +pull-request
+      
+    - name: Run build and Deploy Containers
+      if: github.ref == 'refs/heads/main'
+      run: earthly --allow-privileged --output --ci +all
+        
+    - name: Semantic Release
+      run: | 
+        npm i -D @semantic-release/exec
+        npm i -D @semantic-release-plus/docker
+        npm i -D @semantic-release/git
+        npx semantic-release
+
+  build-osx-linux:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE_COLOR: 1
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download latest earthly
+      run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'"
+
+    - name: Run build
+      run: earthly --allow-privileged --output --ci +build-cli-linux
+
+    - name: Get latest release info
+      id: get_latest_release
+      run: |
+        latest_release=$(curl  "https://api.github.com/repos/bionic-gpt/bionic-gpt/tags" | jq -r '.[0].name')
+        echo "::set-output name=latest_release::$latest_release"
+
+    - name: Upload executable to release
+      if: github.ref == 'refs/heads/main'
+      run: |
+        gh release upload ${{ steps.get_latest_release.outputs.latest_release }} ./bionic-cli-linux --clobber
+
+  build-osx-cli:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE_COLOR: 1
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download latest earthly
+      run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'"
+
+    - name: Run build
+      run: earthly --allow-privileged --output --ci +build-cli-osx
+
+    - name: Get latest release info
+      id: get_latest_release
+      run: |
+        latest_release=$(curl  "https://api.github.com/repos/bionic-gpt/bionic-gpt/tags" | jq -r '.[0].name')
+        echo "::set-output name=latest_release::$latest_release"
+
+    - name: Upload executable to release
+      if: github.ref == 'refs/heads/main'
+      run: |
+        gh release upload ${{ steps.get_latest_release.outputs.latest_release }} ./bionic-cli-darwin --clobber
+
+  build-windows-cli:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORCE_COLOR: 1
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download latest earthly
+      run: "sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly'"
+
+    - name: Run build
+      run: earthly --allow-privileged --output --ci +build-cli-windows
+
+    - name: Get latest release info
+      id: get_latest_release
+      run: |
+        latest_release=$(curl  "https://api.github.com/repos/bionic-gpt/bionic-gpt/tags" | jq -r '.[0].name')
+        echo "::set-output name=latest_release::$latest_release"
+
+    - name: Upload executable to release
+      if: github.ref == 'refs/heads/main'
+      run: |
+        gh release upload ${{ steps.get_latest_release.outputs.latest_release }} ./bionic-cli-windows.exe --clobber
